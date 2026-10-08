@@ -16,9 +16,15 @@ Set up a single pre-downloaded GGUF (any name, e.g. abc.gguf):
 Set up a folder that holds every shard of one model:
     ./setup_local_model.py --gguf /models/mymodel --yes
 
+Set up a split model by pointing at ANY one of its shards (the others next to it
+are found and used together):
+    ./setup_local_model.py --gguf /models/IQ3_XXS/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf --yes
+
 Only Qwen3.8-Flash-Next GGUFs run: setup.py checks for the per_layer_token_embd
-tensor at the end and stops if it is missing. A single file must be the whole
-model (all experts plus the PLE table), not one shard of a split.
+tensor at the end and stops if it is missing. A single file (one not named
+-0000i-of-0000N.gguf) must be the whole model (all experts plus the PLE table).
+A shard of a split (e.g. -00001-of-00002.gguf) is handled as part of its set:
+every sibling shard of that set must be present in the same folder.
 
 Wrapper options (anything else is passed straight through to setup.py -
 --context, --kv, --gpu, --gpus, --host, --api-key, --low-ram, --build, --yes,
@@ -53,6 +59,40 @@ DROP_OPTS = ("--family", "--model", "--gguf-dir")
 
 def file_gb(path: Path) -> float:
     return path.stat().st_size / 1e9
+
+
+def shard_set(path: Path):
+    """The shards of a split model, when `path` is one of them or a folder that holds one.
+
+    Returns (shards, stem, total) where `shards` is the list of every
+    <stem>-0000i-of-0000N.gguf in the same folder, `stem` is the name before the
+    shard suffix, and `total` is N; or None when `path` is not part of a split
+    (a plain single-file model, or a folder with no shard set). A stray mmproj
+    file is ignored - it does not match the shard pattern. Setup is stopped when
+    a shard of the set is missing, since loading it would fail much later.
+    """
+    if path.is_file():
+        m = setup.SHARD_NAME.search(path.name)
+        if m is None:
+            return None                      # a single-file model, not a shard
+        first = path
+    else:
+        firsts = sorted(p for p in path.glob("*-00001-of-*.gguf") if setup.SHARD_NAME.search(p.name))
+        mmproj = [p for p in firsts if p.name.lower().startswith("mmproj")]
+        firsts = [p for p in firsts if p not in mmproj]
+        if len(firsts) != 1:
+            return None                      # no split here, or several: leave the folder path as-is
+        first = firsts[0]
+        m = setup.SHARD_NAME.search(first.name)
+    folder = first.parent
+    total = int(m.group(2))
+    stem = first.name[:m.start()]
+    shards = [folder / ("%s-%05d-of-%05d.gguf" % (stem, i, total)) for i in range(1, total + 1)]
+    missing = [s.name for s in shards if not s.exists()]
+    if missing:
+        setup.fail(f"the split model in {folder} is missing shard(s): {', '.join(missing)}",
+                   "copy every <name>-0000i-of-0000N.gguf of the set into the same folder, then run this again")
+    return shards, stem, total
 
 
 def drop_conflicts(passthrough):
@@ -148,9 +188,19 @@ def main() -> int:
     name = known.name or (gguf.stem if gguf.is_file() else gguf.name) or "Local model"
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "local"
 
-    if gguf.is_dir():
+    split = shard_set(gguf)
+    if split is not None:
+        # a multi-shard model (e.g. ...-IQ3_XXS-00001-of-00002.gguf + its 00002 sibling):
+        # use the shards' own folder directly, so every shard is loaded together - staging
+        # a single renamed file would keep only one shard. setup.py reads N from the first
+        # shard's name and resolves the whole set (gguf_dir_shards / check_shards).
+        shards, _, total = split
+        gguf_dir = shards[0].parent
+        arena = known.arena_gb if known.arena_gb else round(max(sum(file_gb(s) for s in shards) * 0.92, 1.0), 1)
+        setup.ok(f"using the {total}-shard model in {gguf_dir}: " + ", ".join(s.name for s in shards))
+    elif gguf.is_dir():
         gguf_dir = gguf
-        total = sum(file_gb(p) for p in gguf.glob("*.gguf"))
+        total = sum(file_gb(p) for p in gguf.glob("*.gguf") if not p.name.lower().startswith("mmproj"))
         arena = known.arena_gb if known.arena_gb else round(max(total * 0.92, 1.0), 1)
         if not any(gguf.glob("*-00001-of-*.gguf")):
             setup.warn("no '<name>-00001-of-0000N.gguf' shard in that folder: if setup cannot find the model, "
