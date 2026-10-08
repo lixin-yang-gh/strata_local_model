@@ -23,5 +23,4 @@ third_party/*.zip
 *.log
 strata-*.json
 strata-*.txt
-run-*.sh
-run-*.bat
+
