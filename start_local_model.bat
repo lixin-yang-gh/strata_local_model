@@ -4,6 +4,9 @@ rem Mirrors START-HERE.bat but runs setup_local_model.py. Needs only an NVIDIA o
 rem Python is installed for your user account if it is missing (no admin needed).
 rem   Set up a single file:  start_local_model.bat --gguf D:\models\abc.gguf --yes
 rem   Start it later:        start_local_model.bat
+rem .\start_local_model.bat --gguf E:\ai\Strata-data\models\IQ3_S\RVN-Qwen3.8-Flash-Next-IQ3_S-merged.gguf --data-dir E:\ai\Strata-data --compat-bf16 --yes
+rem .\start_local_model.bat --gguf E:\ai\Strata-data\models\IQ3_XXS --data-dir E:\ai\Strata-data --yes
+
 setlocal
 title Strata local model
 cd /d "%~dp0"
